@@ -1,0 +1,12 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Acme Tasks — Sign in</title><link rel="stylesheet" href="app.css"></head>
+<body><main class="card narrow">
+<h1>Acme Tasks</h1><p class="muted">Sample application for TestPilot AI verification. Demo user: <code>demo</code></p>
+<form id="login-form" novalidate>
+  <label for="username">Username</label><input id="username" name="username" autocomplete="username">
+  <label for="password">Password</label><input id="password" name="password" type="password" autocomplete="current-password">
+  <p class="error" data-testid="login-error" hidden></p>
+  <button type="submit">Sign in</button>
+</form></main>
+<script src="app.js"></script><script>login()</script></body></html>

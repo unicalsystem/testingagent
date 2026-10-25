@@ -1,0 +1,32 @@
+# TestPilot AI — local operator configuration (KEY=VALUE).
+# Install:  cp config.local.example config.local && chown 10001:10001 config.local && chmod 600 config.local
+# (uid 10001 is the non-root user inside the api/worker containers; deploy.sh enforces this.)
+# Mounted read-only into the api and worker containers. Never commit config.local.
+#
+# MySQL report store: after every finished run the full report (summary, every step,
+# the JSON report and the self-contained HTML report) is copied into this MySQL database.
+# Tables tp_reports and tp_report_steps are created automatically (never dropped or altered).
+# PostgreSQL remains the application database; MySQL is a reporting copy.
+
+MYSQL_REPORTS_ENABLED=false
+
+# Hostinger hPanel MySQL: Databases -> Management shows the database and user (u123456789_...).
+# For it to accept connections from the VPS, add the VPS IP under Databases -> Remote MySQL,
+# then use the remote hostname shown there (e.g. srv1234.hstgr.io), not "localhost".
+# MySQL on the VPS host itself: use host.docker.internal and bind MySQL to the docker bridge.
+MYSQL_REPORTS_HOST=
+MYSQL_REPORTS_PORT=3306
+MYSQL_REPORTS_DATABASE=
+MYSQL_REPORTS_USER=
+MYSQL_REPORTS_PASSWORD=
+
+# TLS to MySQL: disabled | required (encrypt, no cert check) | verify (encrypt + verify CA)
+# Use "required" or "verify" whenever MySQL is reached over the internet.
+MYSQL_REPORTS_SSL=required
+MYSQL_REPORTS_SSL_CA=
+
+# Optional
+MYSQL_REPORTS_TABLE_PREFIX=tp_
+# Rows larger than this (HTML + JSON) are stored without the HTML; keep below max_allowed_packet.
+MYSQL_REPORTS_MAX_HTML_MB=12
+MYSQL_REPORTS_SYNC_INTERVAL_SECONDS=60

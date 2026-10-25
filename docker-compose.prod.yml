@@ -1,0 +1,150 @@
+# TestPilot AI — production stack for a single Hostinger VPS.
+#
+#   internet ─443─> host nginx (TLS) ─> 127.0.0.1:8081 web ─> api ─> db
+#                                                     worker ─> db, Chromium ─> authorised targets
+#
+# Only the web container publishes a port, and only on 127.0.0.1. PostgreSQL, the API and
+# the worker are unreachable from the internet. The "backend" network has no internet access.
+#
+# Usage: see docs/DEPLOYMENT.md (deploy/scripts/deploy.sh wraps these commands).
+
+name: testpilot
+
+x-backend: &backend
+  image: testpilot-backend:${IMAGE_TAG:-latest}
+  env_file: .env
+  environment:
+    TESTPILOT_CONFIG_LOCAL: /run/testpilot/config.local
+    EVIDENCE_DIR: /data/evidence
+  volumes:
+    - evidence:/data/evidence
+    - ./config.local:/run/testpilot/config.local:ro
+  extra_hosts:
+    - "host.docker.internal:host-gateway"   # lets the MySQL report store live on the VPS host
+  security_opt:
+    - no-new-privileges:true
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options: { max-size: "20m", max-file: "5" }
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-testpilot}
+      POSTGRES_USER: ${POSTGRES_USER:-testpilot}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks: [backend]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    shm_size: 256m
+    security_opt: [no-new-privileges:true]
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options: { max-size: "20m", max-file: "5" }
+
+  migrate:
+    <<: *backend
+    build:
+      context: .
+      dockerfile: deploy/docker/backend.Dockerfile
+    command: ["alembic", "upgrade", "head"]
+    networks: [backend]
+    depends_on:
+      db: { condition: service_healthy }
+    restart: "no"
+    profiles: ["tools"]
+
+  api:
+    <<: *backend
+    build:
+      context: .
+      dockerfile: deploy/docker/backend.Dockerfile
+    networks: [backend, edge]
+    depends_on:
+      db: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/ready', timeout=4).status == 200 else 1)"]
+      interval: 15s
+      timeout: 6s
+      retries: 5
+      start_period: 20s
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 768M }
+
+  worker:
+    <<: *backend
+    command: ["python", "-m", "testpilot.worker"]
+    environment:
+      TESTPILOT_CONFIG_LOCAL: /run/testpilot/config.local
+      EVIDENCE_DIR: /data/evidence
+      TESTPILOT_COMPONENT: worker
+      # Least privilege: the browser host never needs these (they stay in the api container).
+      ANTHROPIC_API_KEY: ""
+      SESSION_SECRET: ""
+    networks: [backend, egress]
+    depends_on:
+      db: { condition: service_healthy }
+    init: true                      # reaps Chromium child processes
+    shm_size: 1gb                   # Chromium needs a large /dev/shm
+    stop_grace_period: 60s          # let an in-flight step finish and record the run
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os,sys,time; sys.exit(0 if time.time()-os.path.getmtime('/tmp/worker-alive') < 120 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits: { cpus: "2.0", memory: 3G, pids: 512 }
+
+  web:
+    image: testpilot-web:${IMAGE_TAG:-latest}
+    build:
+      context: .
+      dockerfile: deploy/docker/web.Dockerfile
+    networks: [edge]
+    ports:
+      - "127.0.0.1:${WEB_PORT:-8081}:8080"
+    depends_on:
+      api: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    security_opt: [no-new-privileges:true]
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options: { max-size: "20m", max-file: "5" }
+
+  # Bundled demo target for end-to-end verification. Internal only (never published).
+  sample-app:
+    image: testpilot-sample:${IMAGE_TAG:-latest}
+    build:
+      context: sample-app
+    networks: [egress]
+    security_opt: [no-new-privileges:true]
+    restart: unless-stopped
+    profiles: ["sample"]
+
+networks:
+  backend:
+    internal: true    # no internet: PostgreSQL and internal traffic only
+  edge: {}
+  egress: {}          # worker's outbound path to test targets (filtered by the egress proxy)
+
+volumes:
+  pgdata:
+    name: testpilot_pgdata
+  evidence:
+    name: testpilot_evidence

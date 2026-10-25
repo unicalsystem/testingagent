@@ -1,0 +1,11 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Acme Tasks — Board</title><link rel="stylesheet" href="app.css"></head>
+<body><main class="card">
+<header><h1 data-testid="welcome"></h1><a href="#" id="logout">Sign out</a></header>
+<form id="add-form"><input data-testid="new-task" placeholder="New task" aria-label="New task">
+<button data-testid="add-task" type="submit">Add</button></form>
+<div class="row"><span data-testid="remaining"></span>
+<label>Show <select id="filter"><option value="all">All</option><option value="open">Open</option><option value="done">Done</option></select></label></div>
+<ul data-testid="task-list"></ul></main>
+<script src="app.js"></script><script>board()</script></body></html>

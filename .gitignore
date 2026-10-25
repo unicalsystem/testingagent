@@ -1,0 +1,13 @@
+# local operator config and secrets — never commit
+config.local
+.env
+.env.*
+!.env.example
+__pycache__/
+*.pyc
+.pytest_cache/
+node_modules/
+frontend/dist/
+evidence/
+backups/
+*.tsbuildinfo
