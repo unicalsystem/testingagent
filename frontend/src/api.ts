@@ -57,6 +57,8 @@ export const api = {
 export const abs = {
   get: <T,>(p: string) => req<T>('GET', p, undefined, true),
   post: <T,>(p: string, b?: unknown) => req<T>('POST', p, b ?? {}, true),
+  put: <T,>(p: string, b: unknown) => req<T>('PUT', p, b, true),
+  del: <T,>(p: string) => req<T>('DELETE', p, undefined, true),
 }
 
 export type Role = 'admin' | 'tester' | 'viewer'  // release-1.0 coarse levels, still used by can()
@@ -71,6 +73,7 @@ export interface Me {
   email?: string; microsoft_linked?: boolean; sign_in_methods?: { password: boolean; microsoft: boolean }
   tenant?: { id: number; slug: string; name: string }
   legal_pending?: string[]
+  licence?: LicenceBrief
 }
 export interface Branding {
   slug: string; name: string; display_name: string; logo_data_url: string; primary_color: string
@@ -306,4 +309,43 @@ export interface MobileSession {
   log: { at: string; kind: string; text: string }[]
   screen: { seq: number; ok: boolean; error: string; note: string; has_image: boolean; width: number | null; height: number | null; url: string; elements: MElement[] }
   busy: boolean; created_at: string; closed_at: string | null
+}
+
+// ---- release 1.9: plans & billing ------------------------------------------------------------
+export type LicenceState = 'unlimited' | 'none' | 'trial' | 'active' | 'expired'
+export interface LicenceBrief {
+  state: LicenceState; plan: { id: number; code: string; name: string; is_trial: boolean } | null
+  features: Record<string, boolean>; read_only: boolean; ends_at: string | null; days_left: number | null; exempt: boolean
+}
+export interface Licence extends LicenceBrief { limits: Record<string, number | null>; trial_used?: boolean }
+export interface Plan {
+  id: number; code: string; name: string; tagline: string; badge: string; is_trial: boolean; trial_days: number
+  prices: Record<string, Record<string, number>>; features: Record<string, boolean>; limits: Record<string, number | null>
+  highlights: string[]; sort_order: number; is_public?: boolean; is_active?: boolean; organizations?: number
+}
+export interface Catalog {
+  plans: Plan[]; features: Record<string, string>; limits: Record<string, string>; periods: Record<string, string>
+  currencies: string[]; gateways: { razorpay: { enabled: boolean; currency: string }; paypal: { enabled: boolean; currency: string } }
+  tax: { label: string; INR: number; USD: number }; self_signup: boolean
+}
+export interface Payment {
+  id: number; plan_name: string; months: number; period: string; currency: string; amount: number; amount_display: string
+  discount: number; coupon_code: string; gateway: string; status: 'created' | 'paid' | 'failed' | 'cancelled'; error: string
+  invoice_no: string; period_start: string | null; period_end: string | null; created_at: string; paid_at: string | null
+  tenant?: string; slug?: string; billing_name?: string; billing_tax_id?: string; gateway_order_id?: string; gateway_payment_id?: string
+}
+export interface BillingOverview extends Catalog {
+  licence: Licence; usage: Record<string, number>; trial: { available: boolean; days: number; plan_id: number | null }
+  razorpay_key_id: string; payments: Payment[]; can_manage: boolean; billing_name: string; billing_tax_id: string; tenant_name: string
+}
+export interface Quote {
+  plan_id: number; plan_name: string; months: number; currency: string; subtotal: number; discount: number; coupon: string
+  coupon_problem: string | null; tax_label: string; tax: number; total: number; carry_over_days: number; renews_same_plan: boolean
+  display: { subtotal: string; discount: string; tax: string; total: string }
+}
+export function money(minor: number, currency: string): string {
+  const v = minor / 100
+  return currency === 'INR'
+    ? '₹' + v.toLocaleString('en-IN', { minimumFractionDigits: v % 1 ? 2 : 0, maximumFractionDigits: 2 })
+    : (currency === 'USD' ? '$' : currency + ' ') + v.toLocaleString('en-US', { minimumFractionDigits: v % 1 ? 2 : 0, maximumFractionDigits: 2 })
 }

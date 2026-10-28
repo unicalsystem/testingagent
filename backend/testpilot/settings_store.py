@@ -9,6 +9,7 @@ Documents (platform_settings.key):
   storage     storage infrastructure: enabled providers, default organization policy, limits (release 1.3)
   legal       legal entity, grievance officer / DPO contacts, policy versions (release 1.3)
   privacy     retention periods for personal data and response deadlines (release 1.3)
+  billing     plans enforcement, self-service sign-up, Razorpay / PayPal, seller and tax details (release 1.9)
 
 Secrets are stored Fernet-encrypted with CREDENTIAL_ENCRYPTION_KEY under keys ending in `_enc` and are
 never returned by any API: `public_view()` strips them and reports only whether one is set.
@@ -95,6 +96,32 @@ DEFAULTS: dict[str, dict[str, Any]] = {
         "hosting_location": "India",
         "terms_version": "2026-10-26",
         "privacy_version": "2026-10-26",
+    },
+    "billing": {
+        "enforce": True,                 # plans and limits apply to organizations (Unical itself is exempt)
+        "self_signup": True,             # registration creates the organization at once (no Super Admin approval)
+        "razorpay_enabled": False,
+        "razorpay_key_id": "",
+        "razorpay_key_secret_enc": "",
+        "razorpay_key_secret_hint": "",
+        "razorpay_webhook_secret_enc": "",
+        "razorpay_webhook_secret_hint": "",
+        "paypal_enabled": False,
+        "paypal_mode": "sandbox",        # sandbox | live
+        "paypal_client_id": "",
+        "paypal_client_secret_enc": "",
+        "paypal_client_secret_hint": "",
+        "seller_name": "Unical Systems Private Limited",
+        "seller_address": "DSL Abacus IT Park, IDA Uppal, Hyderabad, Telangana, India",
+        "seller_tax_id": "",             # GSTIN
+        "seller_email": "",
+        "tax_label": "GST",
+        "tax_percent_inr": 18,           # added on top of INR prices
+        "tax_percent_usd": 0,
+        "invoice_prefix": "TA",
+        "invoice_counter": 0,
+        "reminder_days": [7, 1],
+        "last_test": {},
     },
     "privacy": {
         "request_response_days": 30,       # strictest common deadline (UK GDPR: one month)

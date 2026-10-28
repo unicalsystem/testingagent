@@ -1129,3 +1129,121 @@ class MobileSession(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     last_used_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+# =============================================================================== release 1.9
+# Commercial plans: packages with features / limits / prices, per-organization licence (subscription),
+# payments through Razorpay / PayPal, coupons (discounts or licence extensions), monthly usage counters.
+class BillingPlan(Base):
+    __tablename__ = "billing_plans"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    code: Mapped[str] = mapped_column(String(40), unique=True)
+    name: Mapped[str] = mapped_column(String(80))
+    tagline: Mapped[str] = mapped_column(String(200), default="")
+    badge: Mapped[str] = mapped_column(String(40), default="")            # e.g. "Recommended"
+    is_trial: Mapped[bool] = mapped_column(Boolean, default=False)        # the free trial plan (no payment)
+    trial_days: Mapped[int] = mapped_column(Integer, default=7)
+    is_public: Mapped[bool] = mapped_column(Boolean, default=True)        # shown on the pricing pages
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)        # can be bought / started
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    # {"INR": {"1": 299900, "3": 854700, ...}, "USD": {...}}  amounts in minor units per number of months
+    prices: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    features: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)  # {"mobile": true, ...}
+    limits: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)    # {"users": 5, ...}; null/absent = unlimited
+    highlights: Mapped[list[str]] = mapped_column(JSON, default=list)     # extra marketing lines
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class TenantSubscription(Base):
+    """An organization's licence. status: none (no plan chosen yet) | trialing | active | legacy (pre-1.9
+    organizations: unlimited, no expiry). Expiry is derived from current_period_end."""
+
+    __tablename__ = "tenant_subscriptions"
+    tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), primary_key=True)
+    plan_id: Mapped[int | None] = mapped_column(ForeignKey("billing_plans.id", ondelete="SET NULL"), nullable=True)
+    status: Mapped[str] = mapped_column(String(12), default="none")
+    period_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    current_period_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    trial_used: Mapped[bool] = mapped_column(Boolean, default=False)
+    billing_name: Mapped[str] = mapped_column(String(200), default="")
+    billing_tax_id: Mapped[str] = mapped_column(String(40), default="")   # GSTIN / VAT number
+    billing_address: Mapped[str] = mapped_column(Text, default="")
+    note: Mapped[str] = mapped_column(Text, default="")
+    reminders: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class BillingCoupon(Base):
+    """kind: extend (adds days to the licence, no payment) | percent | amount (discount at checkout)."""
+
+    __tablename__ = "billing_coupons"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    code: Mapped[str] = mapped_column(String(40), unique=True)
+    description: Mapped[str] = mapped_column(String(300), default="")
+    kind: Mapped[str] = mapped_column(String(10), default="extend")
+    extend_days: Mapped[int] = mapped_column(Integer, default=0)
+    extend_plan_id: Mapped[int | None] = mapped_column(ForeignKey("billing_plans.id", ondelete="SET NULL"), nullable=True)
+    percent_off: Mapped[int] = mapped_column(Integer, default=0)
+    amount_off: Mapped[int] = mapped_column(BigInteger, default=0)        # minor units
+    currency: Mapped[str] = mapped_column(String(3), default="")
+    plan_ids: Mapped[list[int]] = mapped_column(JSON, default=list)       # empty = any plan
+    tenant_slugs: Mapped[list[str]] = mapped_column(JSON, default=list)   # empty = any organization
+    max_redemptions: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    redemptions: Mapped[int] = mapped_column(Integer, default=0)
+    valid_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class BillingPayment(Base):
+    __tablename__ = "billing_payments"
+    __table_args__ = (Index("ix_billing_payments_gateway_order", "gateway", "gateway_order_id"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    plan_id: Mapped[int | None] = mapped_column(ForeignKey("billing_plans.id", ondelete="SET NULL"), nullable=True)
+    plan_name: Mapped[str] = mapped_column(String(80), default="")
+    months: Mapped[int] = mapped_column(Integer, default=1)
+    currency: Mapped[str] = mapped_column(String(3))
+    subtotal: Mapped[int] = mapped_column(BigInteger, default=0)
+    discount: Mapped[int] = mapped_column(BigInteger, default=0)
+    tax: Mapped[int] = mapped_column(BigInteger, default=0)
+    tax_label: Mapped[str] = mapped_column(String(40), default="")
+    amount: Mapped[int] = mapped_column(BigInteger, default=0)            # total charged, minor units
+    coupon_id: Mapped[int | None] = mapped_column(ForeignKey("billing_coupons.id", ondelete="SET NULL"), nullable=True)
+    coupon_code: Mapped[str] = mapped_column(String(40), default="")
+    gateway: Mapped[str] = mapped_column(String(12))                      # razorpay | paypal | manual
+    gateway_order_id: Mapped[str] = mapped_column(String(120), default="")
+    gateway_payment_id: Mapped[str] = mapped_column(String(120), default="")
+    status: Mapped[str] = mapped_column(String(12), default="created")    # created | paid | failed | cancelled
+    error: Mapped[str] = mapped_column(Text, default="")
+    invoice_no: Mapped[str] = mapped_column(String(40), default="")
+    billing_name: Mapped[str] = mapped_column(String(200), default="")
+    billing_tax_id: Mapped[str] = mapped_column(String(40), default="")
+    period_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    period_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class BillingCouponRedemption(Base):
+    __tablename__ = "billing_coupon_redemptions"
+    __table_args__ = (UniqueConstraint("coupon_id", "tenant_id", name="uq_coupon_redemption_tenant"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    coupon_id: Mapped[int] = mapped_column(ForeignKey("billing_coupons.id", ondelete="CASCADE"))
+    tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    payment_id: Mapped[int | None] = mapped_column(ForeignKey("billing_payments.id", ondelete="SET NULL"), nullable=True)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class BillingUsage(Base):
+    """Monthly counters for metered usage that has no table of its own (AI requests)."""
+
+    __tablename__ = "billing_usage"
+    tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), primary_key=True)
+    month: Mapped[str] = mapped_column(String(7), primary_key=True)       # YYYY-MM (UTC)
+    metric: Mapped[str] = mapped_column(String(40), primary_key=True)
+    count: Mapped[int] = mapped_column(Integer, default=0)

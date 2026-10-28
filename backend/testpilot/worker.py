@@ -17,7 +17,7 @@ from urllib.parse import urljoin
 
 from sqlalchemy import func, select, text, update
 
-from . import access, apitesting, artifacts, automation, integrations, logging_setup, mobilerun, monitoring, privacy, report, report_store, storage, storage_policy, targets
+from . import access, apitesting, artifacts, automation, billing, integrations, logging_setup, mobilerun, monitoring, privacy, report, report_store, storage, storage_policy, targets
 from .config import get_settings
 from .db import session_scope
 from .egress_proxy import EgressProxy
@@ -670,6 +670,7 @@ def main() -> None:
                 _guard("privacy retention", privacy.purge_expired)
                 _guard("monitor retention", monitoring.purge_old)
                 _guard("mobile session screens", mobilerun.purge_old)
+                _guard("licence reminders", billing.send_reminders)
             if report_store.enabled() and time.time() - last_sync > s.mysql_reports_sync_interval_seconds:
                 ok, bad = report_store.sync_pending()
                 if ok:

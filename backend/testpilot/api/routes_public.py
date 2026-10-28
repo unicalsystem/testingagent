@@ -39,6 +39,10 @@ class RegistrationIn(BaseModel):
     accept_privacy: bool = False   # privacy notice read; consent to process the contact details
     confirm_adult: bool = False    # the contact person is 18 or older (DPDP Act: no child data)
     captcha_token: str | None = Field(default=None, max_length=4000)
+    # Self-service sign-up (release 1.9): the owner account is created at once.
+    username: str = Field(default="", max_length=80)
+    password: str = Field(default="", max_length=256)
+    store_on_unical: bool = False  # agree to Unical-managed evidence storage now (can be changed later)
 
 
 class AcceptIn(BaseModel):
@@ -71,7 +75,7 @@ def slug_check(slug: str, db: Session = Depends(get_db)):
 
 
 @router.post("/registrations", status_code=202)
-def register(body: RegistrationIn, request: Request, db: Session = Depends(get_db)):
+def register(body: RegistrationIn, request: Request, response: Response, db: Session = Depends(get_db)):
     s = get_settings()
     if not s.registration_enabled:
         raise HTTPException(403, "Registration is closed")
@@ -100,6 +104,8 @@ def register(body: RegistrationIn, request: Request, db: Session = Depends(get_d
     problem = tenancy.slug_problem(slug, db)
     if problem:
         raise HTTPException(409, f"Organization address: {problem}")
+    if settings_store.get(db, "billing")["self_signup"]:
+        return _self_signup(body, request, response, db, slug, email, code, ip)
     ack = {"status": "received",
            "message": "Thank you. Unical Systems will review your registration and email the contact address "
                       "once it is approved."}
@@ -118,6 +124,62 @@ def register(body: RegistrationIn, request: Request, db: Session = Depends(get_d
           registration_id=reg.id, slug=slug)
     db.commit()
     return ack
+
+
+USERNAME_RE = re.compile(r"^[a-zA-Z0-9._@-]{3,80}$")
+
+
+def _self_signup(body: RegistrationIn, request: Request, response: Response, db: Session, slug: str, email: str,
+                 code: str, ip: str) -> dict:
+    """Release 1.9: the organization and its owner are created immediately; the owner then chooses a plan."""
+    from ..models import TenantStorage
+    from .routes_auth import issue_session
+
+    username = body.username.strip().lower()
+    if not USERNAME_RE.match(username):
+        raise HTTPException(422, "Choose a username of 3–80 letters, digits, dots, dashes, underscores or @")
+    probs = password_problems(body.password)
+    if probs:
+        raise HTTPException(422, "Password needs " + " and ".join(probs))
+    now = datetime.now(timezone.utc)
+    reg = TenantRegistration(org_name=body.org_name.strip(), requested_slug=slug, contact_name=body.contact_name.strip(),
+                             contact_email=email, contact_phone=body.contact_phone.strip(), country=body.country.strip()[:80] or code,
+                             country_code=code, message=body.message.strip(), ip=ip, status="approved",
+                             decision_note="self-service sign-up", decided_at=now)
+    db.add(reg)
+    try:
+        with db.begin_nested():
+            db.flush()
+            t = tenancy.provision(db, reg, slug, reg.org_name)
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(409, "Organization address: this address is not available")
+    clash = tenancy.identity_conflict(db, t.id, username=username, email=email)
+    if clash:
+        db.rollback()
+        raise HTTPException(409, clash)
+    u = User(tenant_id=t.id, username=username, display_name=body.contact_name.strip(), email=email, role="tenant_owner",
+             password_hash=hash_password(body.password), must_change_password=False)
+    db.add(u)
+    db.flush()
+    ua = request.headers.get("user-agent", "")
+    privacy.record_acceptance(db, ip=ip, user_agent=ua, registration_id=reg.id)
+    privacy.record_acceptance(db, ip=ip, user_agent=ua, user=u)
+    if body.store_on_unical:
+        st = db.get(TenantStorage, t.id)
+        st.mode, st.provider, st.status = "unical", "local", "ok"
+        st.unical_consent_at, st.unical_consent_by, st.unical_consent_source = now, u.id, "signup"
+    audit(db, request, u, "tenant_self_signup", t.name, tenant_id=t.id, slug=slug, registration_id=reg.id)
+    audit(db, request, None, "platform_registration_received", t.name[:200], tenant_id=None, scope="platform",
+          registration_id=reg.id, slug=slug, self_signup=True)
+    issue_session(db, request, response, u, t, "signup")
+    db.commit()
+    mailer.try_send(db, email, f"Welcome to TestAgent — {t.name}",
+                    f"Hello {u.display_name or u.username},\n\nYour organization {t.name} is ready.\n"
+                    f"Sign-in address: {get_settings().public_url}/{t.slug}/\nUsername: {u.username}\n\n"
+                    f"Choose a plan or start your free trial: {get_settings().public_url}/{t.slug}/billing\n\nUnical Systems")
+    return {"status": "created", "slug": t.slug, "redirect": f"/{t.slug}/billing?welcome=1",
+            "message": f"Your organization is ready at {get_settings().public_url}/{t.slug}/"}
 
 
 @router.post("/invitations/inspect")

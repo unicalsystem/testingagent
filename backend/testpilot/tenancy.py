@@ -87,6 +87,8 @@ def provision(db: Session, reg: TenantRegistration, slug: str, name: str) -> Ten
     db.add(TenantBranding(tenant_id=t.id, display_name=name))
     from . import storage_policy
     storage_policy.row(db, t.id)  # storage not chosen yet: runs wait for the administrators' choice
+    from . import billing
+    billing.on_tenant_created(db, t.id)  # no plan yet: the owner chooses one (or the free trial) first
     return t
 
 

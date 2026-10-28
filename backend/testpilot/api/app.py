@@ -18,7 +18,7 @@ from ..db import get_db
 from ..models import Run, User, WorkerHeartbeat, utcnow
 from . import (routes_access, routes_admin, routes_auth, routes_oidc, routes_platform, routes_privacy, routes_projects,
                routes_automation, routes_public, routes_runs, routes_storage, routes_testmgmt,
-               routes_apitest, routes_monitoring, routes_integrations, routes_mobile)
+               routes_apitest, routes_monitoring, routes_integrations, routes_mobile, routes_billing)
 from .deps import csrf_guard, require_perm
 
 log = logging.getLogger("testpilot.api")
@@ -119,7 +119,7 @@ def create_app() -> FastAPI:
 
     tenant_routers = (routes_auth.router, routes_oidc.scoped, routes_admin.router, routes_access.router,
                       routes_projects.router, routes_runs.router, routes_testmgmt.router, routes_automation.router, routes_storage.router, routes_privacy.scoped,
-                      routes_apitest.router, routes_monitoring.router, routes_integrations.router, routes_mobile.router)
+                      routes_apitest.router, routes_monitoring.router, routes_integrations.router, routes_mobile.router, routes_billing.router)
     # Tenant-scoped API: /api/t/<slug>/...  (tenant taken from the URL, checked against the session)
     scoped = APIRouter(prefix="/t/{tenant_slug}")
     scoped.add_api_route("/system/status", system_status, methods=["GET"], tags=["system"])
@@ -130,7 +130,9 @@ def create_app() -> FastAPI:
         api.include_router(r)
     api.include_router(scoped)
     api.include_router(routes_public.router)
-    api.include_router(routes_mobile.public)  # signed app downloads for Appium servers
+    api.include_router(routes_mobile.public)
+    api.include_router(routes_billing.public)  # price list, Razorpay webhook
+    api.include_router(routes_billing.platform)  # signed app downloads for Appium servers
     api.include_router(routes_oidc.public)
     api.include_router(routes_privacy.public)
     api.include_router(routes_platform.router)

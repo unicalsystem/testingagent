@@ -44,6 +44,12 @@ def user_out(u: User, tenant: Tenant | None = None, db: Session | None = None) -
         if tenant is not None:
             out["sign_in_methods"] = settings_store.methods(db, tenant)
         out["legal_pending"] = privacy.needs_acceptance(db, u)
+        if tenant is not None:
+            from .. import billing
+            e = billing.entitlements(db, tenant)
+            out["licence"] = {"state": e["state"], "plan": e["plan"], "features": e["features"], "read_only": e["read_only"],
+                              "ends_at": e["ends_at"].isoformat() if e["ends_at"] else None, "days_left": e["days_left"],
+                              "exempt": e["exempt"]}
     return out
 
 

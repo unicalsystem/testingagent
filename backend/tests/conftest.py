@@ -79,10 +79,13 @@ def clean(schema):
                        "group_members, project_assignments, tenant_storage, case_versions, privacy_requests, "
                        "legal_acceptances, test_runs, test_run_items, automation_jobs, automation_items, "
                   "api_suites, api_cases, api_runs, api_run_results, api_monitors, monitor_checks, "
-                  "monitor_incidents, integrations, integration_syncs, integration_issues, mobile_providers, mobile_apps, mobile_cases, mobile_run_groups, mobile_runs, mobile_sessions RESTART IDENTITY CASCADE"))
+                  "monitor_incidents, integrations, integration_syncs, integration_issues, mobile_providers, mobile_apps, mobile_cases, mobile_run_groups, mobile_runs, mobile_sessions, tenant_subscriptions, billing_coupons, billing_payments, "
+                           "billing_coupon_redemptions, billing_usage RESTART IDENTITY CASCADE"))
         # the migration's default tenant (id 1) is recreated for the next test
         c.execute(text("INSERT INTO tenants (slug, name, status) VALUES ('unical', 'Unical Systems', 'active')"))
         c.execute(text("INSERT INTO tenant_branding (tenant_id, display_name) VALUES (1, 'Unical Systems')"))
+        # release 1.9 tests switch self-service sign-up on explicitly; older tests exercise the approval flow
+        c.execute(text("""INSERT INTO platform_settings (key, value) VALUES ('billing', '{"self_signup": false}')"""))
         # as migrated: existing organizations keep Unical-managed storage
         c.execute(text("INSERT INTO tenant_storage (tenant_id, mode, provider, unical_consent_at, unical_consent_source, "
                        "status) VALUES (1, 'unical', 'local', now(), 'legacy', 'ok')"))

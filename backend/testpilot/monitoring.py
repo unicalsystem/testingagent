@@ -103,6 +103,12 @@ def probe(mid: int) -> dict | None:
             return None
         suite = db.get(ApiSuite, m.suite_id) if m.suite_id else None
         pol = monitor_policy(db, m, suite)
+        from . import billing
+        blocked = billing.monitor_block(db, m.tenant_id)
+        if blocked:
+            m.status, m.last_error = "paused", f"Not checked: {blocked}"
+            m.last_check_at = utcnow()
+            return None
         if pol.problems:
             m.status, m.last_error = "paused", "Not checked: " + "; ".join(pol.problems)
             m.last_check_at = utcnow()

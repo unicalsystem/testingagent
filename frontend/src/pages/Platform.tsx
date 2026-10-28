@@ -5,6 +5,7 @@ import { AuthSecurity, EmailSettings } from '../components/PlatformSettings'
 import SsoSettings from '../components/SsoSettings'
 import PlatformStorage from '../components/PlatformStorage'
 import { LegalSettings } from '../components/PrivacyAdmin'
+import PlatformBilling from '../components/PlatformBilling'
 
 interface Reg { id: number; org_name: string; requested_slug: string; contact_name: string; contact_email: string; contact_phone: string; country: string; message: string; status: string; decision_note: string; created_at: string }
 interface Tn { id: number; slug: string; name: string; status: string; status_reason: string; created_at: string; usage: { users: number; projects: number; runs: number } }
@@ -43,7 +44,7 @@ function ApproveModal({ reg, onClose, onDone }: { reg: Reg; onClose: () => void;
   )
 }
 
-const PLATFORM_TABS = [['orgs', 'Registrations & organizations'], ['auth', 'Authentication & Security'],
+const PLATFORM_TABS = [['orgs', 'Registrations & organizations'], ['billing', 'Plans & billing'], ['auth', 'Authentication & Security'],
   ['microsoft', 'Microsoft 365 (Unical)'], ['email', 'E-mail (SMTP)'], ['storage', 'Storage infrastructure'],
   ['legal', 'Legal & privacy']] as const
 
@@ -56,6 +57,7 @@ export default function Platform() {
         {PLATFORM_TABS.map(([k, label]) => <button key={k} role="tab" aria-selected={tab === k} className={`btn sm${tab === k ? ' primary' : ''}`} onClick={() => setTab(k)}>{label}</button>)}
       </div>
       {tab === 'orgs' && <Organizations />}
+      {tab === 'billing' && <PlatformBilling />}
       {tab === 'auth' && <AuthSecurity />}
       {tab === 'microsoft' && <><p className="muted small">Microsoft 365 sign-in for the <b>Unical</b> organization (platform administration). Customer organizations configure their own Microsoft tenants separately under their Identity &amp; SSO settings.</p><SsoSettings /></>}
       {tab === 'email' && <EmailSettings />}

@@ -87,21 +87,30 @@ def require_perm(perm: str):
     if perm not in permissions.MATRIX:
         raise KeyError(perm)
 
-    def dep(user: User = Depends(current_user)) -> User:
+    def dep(request: Request, user: User = Depends(current_user), db: Session = Depends(get_db),
+            tenant: Tenant = Depends(current_tenant)) -> User:
         if not permissions.has(user.role, perm):
             raise HTTPException(403, "You do not have permission for this action")
         if user.must_change_password and perm != "tenant.member":
             raise HTTPException(403, "Change your password before continuing")
+        if request.method not in SAFE_METHODS:
+            from .. import billing
+            billing.guard_request(db, request, tenant)
         return user
 
     return dep
 
 
-def member(request: Request, user: User = Depends(current_user)) -> User:
+def member(request: Request, user: User = Depends(current_user), db: Session = Depends(get_db),
+           tenant: Tenant = Depends(current_tenant)) -> User:
     """Any signed-in member of the URL's organization. Project routes then check project permissions
-    (access.require) for the specific project. Unsafe methods need a changed password."""
+    (access.require) for the specific project. Unsafe methods need a changed password and are checked
+    against the organization's plan (release 1.9: licence state, feature modules, limits)."""
     if user.must_change_password and request.method not in SAFE_METHODS:
         raise HTTPException(403, "Change your password before continuing")
+    if request.method not in SAFE_METHODS:
+        from .. import billing
+        billing.guard_request(db, request, tenant)
     return user
 
 

@@ -533,6 +533,9 @@ def create_group(pid: int, body: GroupIn, request: Request, db: Session = Depend
         raise HTTPException(422, "Nothing to run: " + "; ".join(f"{s['case']} on {s['device'] or 'any device'}: {s['reason']}" for s in skipped[:5]))
     if len(pairs) > 200:
         raise HTTPException(422, "At most 200 case × device combinations per run")
+    from .. import billing
+    from ..models import Tenant
+    billing.check_quota(db, db.get(Tenant, me.tenant_id), "mobile_runs_per_month", len(pairs), request)
     if any(c.kind == "web" for c, _ in pairs):
         pol = mobilerun.targets.build(db, project)
         if pol.problems:
@@ -650,6 +653,11 @@ def create_session(pid: int, body: SessionIn, request: Request, db: Session = De
     project = _project(db, pid, me, "run.execute")
     if body.purpose == "ai":
         access.require(db, me, project, "ai.use")
+        from .. import billing
+        from ..models import Tenant
+        tn = db.get(Tenant, me.tenant_id)
+        billing.require_feature(db, tn, "ai", request)
+        billing.consume_ai(db, tn, 1, request)
         if not live.ai_configured():
             raise HTTPException(503, "Claude is not configured or temporarily unavailable on this server")
     prov = _provider_for(db, body.provider_id, me, pid)

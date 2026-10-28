@@ -23,6 +23,7 @@ import MobileCasePage from './pages/MobileCase'
 import MobileRunPage from './pages/MobileRun'
 import MobileSessionPage from './pages/MobileSession'
 import { MonitorAlerts } from './components/MonitorAlerts'
+import BillingPage from './pages/Billing'
 
 export function Logo({ branding, size = 30 }: { branding?: Branding | null; size?: number }) {
   if (branding?.logo_data_url) return <img src={branding.logo_data_url} alt="" width={size} height={size} style={{ objectFit: 'contain', borderRadius: 6, background: '#fff' }} />
@@ -45,12 +46,23 @@ const ICONS: Record<string, string> = {
   platform: 'M12 3l8 4.5v9L12 21l-8-4.5v-9zM12 3v18M4 7.5l8 4.5 8-4.5',
   privacy: 'M12 3l7 3v5c0 4.5-3 8-7 10-4-2-7-5.5-7-10V6zM9 12l2 2 4-4',
   monitor: 'M3 12h4l3-7 4 14 3-7h4',
+  billing: 'M3 7h18v10H3zM3 10h18M7 14h3',
 }
 function Ico({ name }: { name: string }) {
   return <svg className="ico" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round" strokeLinecap="round" aria-hidden="true"><path d={ICONS[name]} /></svg>
 }
 const NAV_KEY = 'tp-nav-collapsed'
 function readCollapsed() { try { return localStorage.getItem(NAV_KEY) === '1' } catch { return false } }
+
+function LicenceBanner({ me, manage }: { me: Me; manage: boolean }) {
+  const l = me.licence
+  if (!l || l.exempt) return null
+  const link = manage ? <> — <NavLink to="/billing">Plans &amp; billing</NavLink></> : <> Ask your organization's owner or administrator to renew.</>
+  if (l.state === 'none') return <div className="alert warn" role="status">Your organization has no plan yet, so TestAgent is read-only. Start the free trial or choose a plan{link}</div>
+  if (l.state === 'expired') return <div className="alert err" role="status">Your {l.plan?.is_trial ? 'free trial' : `${l.plan?.name ?? ''} plan`} has expired. Your data is safe and visible, but tests, AI and monitoring are paused until you renew{link}</div>
+  if (l.days_left !== null && l.days_left <= 7) return <div className="alert warn" role="status">Your {l.state === 'trial' ? 'free trial' : `${l.plan?.name} plan`} ends in {l.days_left} day{l.days_left === 1 ? '' : 's'}{link}</div>
+  return null
+}
 
 export default function App({ slug }: { slug: string }) {
   const [branding, setBranding] = useState<Branding | null | undefined>(undefined)
@@ -107,6 +119,7 @@ export default function App({ slug }: { slug: string }) {
   if (me.legal_pending?.length) return <LegalGate pending={me.legal_pending} onDone={() => setMe({ ...me, legal_pending: [] })} onSignOut={async () => { await api.post('/auth/logout').catch(() => {}); setMe(null) }} />
 
   const has = (perm: string) => me.permissions.includes(perm)
+  const refreshMe = () => { api.get<Me>('/auth/me').then(setMe).catch(() => {}) }
   const can = (r: Role) => has(LEVEL_PERM[r])
   const showAdmin = has('tenant.users') || has('tenant.settings') || has('tenant.audit') || has('tenant.targets') || has('tenant.groups') || has('tenant.sso')
   const notice = new URLSearchParams(loc.search).get('notice')
@@ -125,6 +138,7 @@ export default function App({ slug }: { slug: string }) {
           <div className="brand"><Logo branding={branding} /><div>{branding.display_name}<small>TestAgent · Intelligent web testing</small></div></div>
           <NavLink to="/projects" title="Projects"><Ico name="projects" /><span className="label">Projects</span></NavLink>
           <NavLink to="/monitoring" title="API monitoring"><Ico name="monitor" /><span className="label">API monitoring</span></NavLink>
+          {me.licence && !me.licence.exempt && <NavLink to="/billing" title="Plans & billing"><Ico name="billing" /><span className="label">Plans &amp; billing</span></NavLink>}
           {showAdmin && <NavLink to="/admin" title="Administration"><Ico name="admin" /><span className="label">Administration</span></NavLink>}
           {me.is_platform_admin && <NavLink to="/platform" title="Platform (Unical)"><Ico name="platform" /><span className="label">Platform (Unical)</span></NavLink>}
           <NavLink to="/my-privacy" title="Privacy & my data"><Ico name="privacy" /><span className="label">Privacy &amp; my data</span></NavLink>
@@ -141,6 +155,7 @@ export default function App({ slug }: { slug: string }) {
           <div className="legal-links"><a href="/privacy" target="_blank" rel="noopener">Privacy</a> · <a href="/terms" target="_blank" rel="noopener">Terms</a> · Unical Systems</div>
         </nav>
         <main className="main">
+          <LicenceBanner me={me} manage={has('tenant.settings')} />
           <MonitorAlerts />
           {notice === 'microsoft_linked' && <div className="alert ok" role="status">Your Microsoft account is linked. You can now sign in with Microsoft.</div>}
           {status && !status.ai.available && (
@@ -160,7 +175,7 @@ export default function App({ slug }: { slug: string }) {
             <div className="alert warn" role="status">No test worker is online. Queued runs will start when a worker connects.</div>
           )}
           <Routes>
-            <Route path="/" element={<Navigate to="/projects" replace />} />
+            <Route path="/" element={<Navigate to={me.licence?.state === 'none' && has('tenant.settings') ? '/billing' : '/projects'} replace />} />
             <Route path="/projects" element={<Projects />} />
             <Route path="/projects/:pid" element={<ProjectPage />} />
             <Route path="/projects/:pid/cases/new" element={<CaseEditor />} />
@@ -177,6 +192,7 @@ export default function App({ slug }: { slug: string }) {
             <Route path="/mobile-runs/:gid" element={<MobileRunPage />} />
             <Route path="/mobile-sessions/:sid" element={<MobileSessionPage />} />
             <Route path="/my-privacy" element={<MyPrivacy />} />
+            <Route path="/billing" element={<BillingPage onLicence={refreshMe} />} />
             {showAdmin && <Route path="/admin" element={<Admin />} />}
             {me.is_platform_admin && <Route path="/platform" element={<Platform />} />}
             <Route path="*" element={<div className="empty">Page not found. <NavLink to="/projects">Go to projects</NavLink></div>} />
