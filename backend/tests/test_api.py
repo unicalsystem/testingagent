@@ -36,13 +36,13 @@ def test_wrong_password_and_lockout(app):
     for _ in range(5):
         assert c.post("/api/auth/login", json={"username": "bob", "password": "nope"}, headers=H).status_code == 401
     # locked now, even with the right password
-    assert c.post("/api/auth/login", json={"username": "bob", "password": "Password-12345"}, headers=H).status_code == 429
+    assert c.post("/api/auth/login", json={"username": "bob", "password": "Password-12345"}, headers=H).status_code == 401  # locked (1.2: no longer distinguishable from a wrong password)
 
 
 def test_unknown_user_same_error(app):
     c = TestClient(app, base_url="https://testingagent.unical.in")
     r = c.post("/api/auth/login", json={"username": "ghost", "password": "x"}, headers=H)
-    assert r.status_code == 401 and r.json()["detail"] == "Invalid username or password"
+    assert r.status_code == 401 and r.json()["detail"].startswith("Invalid username or password")
 
 
 def test_csrf_header_and_origin_required(app):
@@ -217,7 +217,8 @@ def test_ai_generation_validates_claude_output(admin, monkeypatch):
     assert [c["name"] for c in out["test_cases"]] == ["Login works"]
     assert len(out["rejected"]) == 1  # the script step from "Claude" was refused
     sent = fake.messages.calls[0]
-    assert sent["tool_choice"]["name"] == "submit_test_cases"
+    assert sent["tool_choice"] == {"type": "auto"}
+    assert [t["name"] for t in sent["tools"]] == ["submit_test_cases"]
 
 
 def test_ai_outage_degrades_gracefully(admin, monkeypatch):

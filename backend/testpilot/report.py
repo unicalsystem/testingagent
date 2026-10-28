@@ -140,8 +140,8 @@ def to_html(db: Session, data: dict) -> bytes:
 
     doc = f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>TestPilot AI report — run #{run['id']}</title><style>{_CSS}</style></head><body><div class="wrap">
-<div class="muted">TestPilot AI · Test execution report</div>
+<title>TestAgent report — run #{run['id']}</title><style>{_CSS}</style></head><body><div class="wrap">
+<div class="muted">TestAgent · Test execution report</div>
 <h1>{e(case.get('name') or 'Test case')} <span class="badge {e(run['status'])}">{e(run['status'])}</span></h1>
 <div class="muted">{e(proj.get('name', ''))} · {e(proj.get('base_url', ''))}</div>
 <h2>Summary</h2><div class="card grid">
@@ -155,6 +155,6 @@ def to_html(db: Session, data: dict) -> bytes:
 <tbody>{''.join(rows)}</tbody></table>
 {ai}
 <h2>Evidence manifest</h2><table><thead><tr><th>ID</th><th>Kind</th><th>File</th><th>Size</th><th>SHA-256</th></tr></thead><tbody>{ev_list}</tbody></table>
-<footer>Generated {e(data['generated_at'])} by TestPilot AI. Evidence files are held in private storage and can be downloaded by authorised users; hashes above identify the exact files.</footer>
+<footer>Generated {e(data['generated_at'])} by TestAgent. Evidence files are held in private storage and can be downloaded by authorised users; hashes above identify the exact files.</footer>
 </div></body></html>"""
     return doc.encode()

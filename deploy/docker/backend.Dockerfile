@@ -1,4 +1,4 @@
-# TestPilot AI backend image — used by the api, worker and migrate services.
+# TestAgent backend image — used by the api, worker and migrate services.
 FROM python:3.12-slim-bookworm
 
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 \

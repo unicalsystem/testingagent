@@ -17,13 +17,14 @@ from urllib.parse import urljoin
 
 from sqlalchemy import func, select, text, update
 
-from . import logging_setup, report, report_store, storage, targets
+from . import access, apitesting, artifacts, automation, integrations, logging_setup, mobilerun, monitoring, privacy, report, report_store, storage, storage_policy, targets
 from .config import get_settings
 from .db import session_scope
 from .egress_proxy import EgressProxy
 from .logging_setup import redact, register_secret
-from .models import TERMINAL, Project, ProjectSecret, Run, RunStep, WorkerHeartbeat
+from .models import TERMINAL, AuditLog, Project, ProjectSecret, Run, RunStep, Tenant, TestRunItem, User, WorkerHeartbeat
 from .security import SecretsUnavailable, decrypt_secret
+from .storage_providers import StorageError
 from .steps import SECRET_RE, describe, secret_names
 from .urlguard import TargetRejected, check_url
 
@@ -51,9 +52,13 @@ def reap_stale() -> int:
     s = get_settings()
     cutoff = utcnow() - timedelta(minutes=s.stale_run_minutes)
     with session_scope() as db:
+        stale = func.coalesce(Run.heartbeat_at, Run.started_at) < cutoff
+        # Organizations with their own storage: whatever was captured is uploaded (or expires) like any run.
+        db.execute(update(Run).where(Run.status == "running", stale, Run.storage_mode == "external")
+                   .values(upload_state="pending"))
         res = db.execute(
             update(Run)
-            .where(Run.status == "running", func.coalesce(Run.heartbeat_at, Run.started_at) < cutoff)
+            .where(Run.status == "running", stale)
             .values(status="error", finished_at=utcnow(),
                     error="Worker stopped responding (no heartbeat); the run was abandoned. Re-run it.")
         )
@@ -68,9 +73,11 @@ def claim(worker_id: str) -> int | None:
         running = db.scalar(select(func.count()).select_from(Run).where(Run.status == "running")) or 0
         if running >= s.max_concurrent_runs:
             return None
+        # Runs of suspended organizations stay queued until the organization is reactivated.
         run = db.scalars(
-            select(Run).where(Run.status == "queued").order_by(Run.created_at, Run.id)
-            .with_for_update(skip_locked=True).limit(1)
+            select(Run).join(Tenant, Tenant.id == Run.tenant_id)
+            .where(Run.status == "queued", Tenant.status == "active").order_by(Run.created_at, Run.id)
+            .with_for_update(of=Run, skip_locked=True).limit(1)
         ).first()
         if not run:
             return None
@@ -93,6 +100,8 @@ class Execution:
         self.secrets: dict[str, str] = {}
         self.blocked_count = 0
         self._log_fh = None
+        self.storage_down = False  # storage not usable at start: nothing is recorded
+        self.storage_block: str | None = None
 
     # ---- logging ----
     def log(self, msg: str) -> None:
@@ -142,16 +151,51 @@ class Execution:
         hb.start()
         final_status, final_error = "error", ""
         try:
+            self._decide_storage()
             with session_scope() as db:
                 run = db.get(Run, self.run_id)
                 project = db.get(Project, run.project_id)
-                rd = storage.run_dir(run)
+                tenant = db.get(Tenant, run.tenant_id)
+                # Re-authorise at execution time: the queue entry alone is not trusted.
+                if not tenant or tenant.status != "active":
+                    raise RunAborted("error", "The organization is not active; the run was not executed")
+                if not project or project.tenant_id != run.tenant_id or project.archived:
+                    raise RunAborted("error", "The project is not available to this organization")
+                if run.requested_by:
+                    # The requester's access is re-evaluated now: an assignment that expired or was
+                    # revoked while the run waited in the queue stops it here.
+                    u = db.get(User, run.requested_by)
+                    if (not u or not u.is_active or u.tenant_id != run.tenant_id
+                            or not access.has(db, u, project.id, "run.execute")):
+                        raise RunAborted("error", "The person who started this run no longer has permission "
+                                                  "to run tests in this project")
+                if self.storage_block:
+                    raise RunAborted("error", self.storage_block)
+                srow = storage_policy.row(db, run.tenant_id)
+                if run.storage_mode == "external":
+                    # Fail safe before anything is captured: the destination must be reachable now.
+                    try:
+                        prov = storage_policy.provider_for(db, srow)
+                        prov.ensure_folder(storage_policy.run_parts(storage_policy.folders(db, srow), project, run.id))
+                    except Exception as e:  # any failure here (not only StorageError) must fail safe
+                        self.storage_down = True
+                        self._storage_health(str(e))
+                        raise RunAborted("error", f"Your organization's {storage_policy.PROVIDER_LABELS[run.storage_provider]} "
+                                                  f"storage is unavailable ({e}). The test was not run and nothing was stored.")
+                rd = storage.work_dir(run)
+                if run.storage_mode == "external":
+                    import json as _json
+                    (rd / "test-case.json").write_text(_json.dumps(
+                        {"format": "testpilot.test_case", "run_id": run.id, "test_case_id": run.test_case_id,
+                         **{k: run.case_snapshot.get(k) for k in ("name", "description", "steps")}},
+                        indent=2, ensure_ascii=False), encoding="utf-8")
                 pol = targets.build(db, project)
                 snapshot = dict(run.case_snapshot)
                 needed = secret_names(snapshot.get("steps", []))
                 if needed:
                     rows = {r.name: r for r in db.scalars(select(ProjectSecret).where(
-                        ProjectSecret.project_id == project.id, ProjectSecret.name.in_(needed))).all()}
+                        ProjectSecret.tenant_id == run.tenant_id, ProjectSecret.project_id == project.id,
+                        ProjectSecret.name.in_(needed))).all()}
                     missing = needed - rows.keys()
                     if missing:
                         raise RunAborted("error", "Missing project secrets: " + ", ".join(sorted(missing)))
@@ -433,14 +477,18 @@ class Execution:
                 self.log(f"run finished: {status}{(' — ' + error) if error else ''}")
                 self._log_fh.close()
                 self._log_fh = None
+            if self.storage_down:
+                self._finish_without_artifacts(status, error)
+                return
             with session_scope() as db:
                 run = db.get(Run, self.run_id)
-                rd = storage.run_dir(run)
+                rd = storage.work_dir(run)
                 db.execute(update(RunStep).where(RunStep.run_id == run.id, RunStep.status.in_(("pending", "running")))
                            .values(status="skipped"))
                 for fname, kind, mime in (("trace.zip", "trace", "application/zip"),
                                           ("video.webm", "video", "video/webm"),
-                                          ("run.log", "log", "text/plain")):
+                                          ("run.log", "log", "text/plain"),
+                                          ("test-case.json", "test_case", "application/json")):
                     p = rd / fname
                     if p.exists():
                         os.chmod(p, 0o640)
@@ -453,6 +501,15 @@ class Execution:
                 run.error = error[:4000]
                 run.summary = counts
                 run.finished_at = utcnow()
+                # Write the outcome into any test-run items that requested this automated run.
+                item_status = {"passed": "passed", "failed": "failed"}.get(run.status, "retest")
+                actual = (f"Automated run #{run.id}: all {counts['total']} steps passed" if run.status == "passed"
+                          else f"Automated run #{run.id} {run.status}: {run.error[:1500]}")
+                db.execute(update(TestRunItem).where(TestRunItem.automated_run_id == run.id,
+                                                 TestRunItem.tenant_id == run.tenant_id).values(
+                    status=item_status, actual_result=actual, executed_at=utcnow(),
+                    executed_by_name="TestAgent (automated)", updated_at=utcnow()))
+                automation.on_run_finished(db, run)  # AI-automation trial runs
                 db.flush()
                 data = report.build_data(db, run)
                 (rd / "report.json").write_bytes(report.to_json(data))
@@ -461,14 +518,64 @@ class Execution:
                                           ("report.html", "report_html", "text/html")):
                     os.chmod(rd / fname, 0o640)
                     storage.record(db, run, rd / fname, kind, mime)
+                external = run.storage_mode == "external"
+                if external:
+                    run.upload_state = "pending"
             log.info("run %s finished: %s", self.run_id, status)
-            if report_store.enabled():
+            if external:
+                try:
+                    if not artifacts.upload_run(self.run_id):
+                        log.warning("run %s: artifacts wait for the organization's storage", self.run_id)
+                except Exception:
+                    log.exception("run %s: upload failed; will retry", self.run_id)
+            elif report_store.enabled():
                 report_store.sync_pending(limit=5)  # push this report now; retries happen in the main loop
         except Exception:
             log.exception("could not finalise run %s", self.run_id)
             with session_scope() as db:
                 db.execute(update(Run).where(Run.id == self.run_id, Run.status == "running").values(
                     status="error", finished_at=utcnow(), error=(error or "Failed to finalise run")[:4000]))
+                db.execute(update(Run).where(Run.id == self.run_id, Run.storage_mode == "external")
+                           .values(upload_state="pending"))
+
+
+    def _decide_storage(self) -> None:
+        """Fixes where this run's artifacts go before anything else happens, so every later path
+        (including aborts) follows the organization's storage choice."""
+        self.storage_block = None
+        with session_scope() as db:
+            run = db.get(Run, self.run_id)
+            block = storage_policy.run_block_reason(db, run.tenant_id)
+            if block:
+                self.storage_block, self.storage_down = block, True
+                return
+            srow = storage_policy.row(db, run.tenant_id)
+            run.storage_mode = srow.mode
+            run.storage_provider = srow.provider if srow.mode == "external" else "local"
+
+    def _storage_health(self, err: str) -> None:
+        with session_scope() as db:
+            run = db.get(Run, self.run_id)
+            srow = storage_policy.row(db, run.tenant_id)
+            srow.status, srow.last_error, srow.last_check_at = "error", err[:1000], utcnow()
+
+    def _finish_without_artifacts(self, status: str, error: str) -> None:
+        """The organization's storage could not be used: record only the outcome, keep no files."""
+        if self._log_fh:
+            self._log_fh.close()
+            self._log_fh = None
+        with session_scope() as db:
+            run = db.get(Run, self.run_id)
+            db.execute(update(RunStep).where(RunStep.run_id == run.id, RunStep.status.in_(("pending", "running")))
+                       .values(status="skipped"))
+            run.status, run.error, run.finished_at = "error", error[:4000], utcnow()
+            run.summary = {"total": len(run.steps), "passed": 0, "failed": 0, "skipped": len(run.steps),
+                           "blocked_requests": 0}
+            run.report_synced_at = utcnow()  # nothing to copy
+            if run.storage_mode == "external":
+                shutil.rmtree(storage.spool_root() / "tenants" / str(run.tenant_id) / "runs" / str(run.id),
+                              ignore_errors=True)
+        log.info("run %s not executed: %s", self.run_id, error)
 
 
 def _slug(s: str) -> str:
@@ -493,6 +600,25 @@ def beat(worker_id: str, run_id: int | None = None) -> None:
         db.execute(WorkerHeartbeat.__table__.delete().where(WorkerHeartbeat.last_seen < utcnow() - timedelta(days=1)))
 
 
+def expire_assignments() -> int:
+    """Records assignments that reached their end (enforcement itself happens on every request)."""
+    with session_scope() as db:
+        rows = access.mark_expired(db)
+        for a in rows:
+            db.add(AuditLog(tenant_id=a.tenant_id, scope="tenant", action="assignment_expired",
+                            target=f"assignment {a.id}",
+                            detail={"assignment_id": a.id, "user_id": a.user_id, "group_id": a.group_id,
+                                    "project_id": a.project_id, "scope": a.scope}))
+        return len(rows)
+
+
+def _guard(name: str, fn) -> None:
+    try:
+        fn()
+    except Exception:
+        log.exception("%s job failed", name)
+
+
 def run_once(worker_id: str = "test-worker") -> int | None:
     rid = claim(worker_id)
     if rid:
@@ -515,8 +641,10 @@ def main() -> None:
     signal.signal(signal.SIGTERM, lambda *_: _shutdown.set())
     signal.signal(signal.SIGINT, lambda *_: _shutdown.set())
     log.info("worker %s started (max concurrent runs %s)", worker_id, s.max_concurrent_runs)
+    monitoring.start(_shutdown)  # API uptime monitors (release 1.6)
+    mobilerun.start(_shutdown, worker_id)  # mobile runs and live device sessions (release 1.8)
     hb_file = Path("/tmp/worker-alive")
-    last_reap = last_sync = 0.0
+    last_reap = last_sync = last_upload = last_daily = 0.0
     if report_store.enabled():
         r = report_store.check()
         log.info("MySQL report store: %s", "connected to " + r.get("server", "") if r.get("ok") else "UNAVAILABLE — " + r.get("error", ""))
@@ -525,16 +653,33 @@ def main() -> None:
             hb_file.write_text(str(time.time()))
             beat(worker_id)
             if time.time() - last_reap > 60:
-                n = reap_stale()
+                n = reap_stale() + automation.reap_stale() + apitesting.reap_stale() + integrations.reap_stale() + mobilerun.reap_stale()
                 if n:
                     log.warning("marked %s stale run(s) as error", n)
+                expire_assignments()
                 last_reap = time.time()
+            # Housekeeping: each job is isolated and rescheduled before it runs, so a failing job can
+            # neither repeat on every loop nor stop test runs from being claimed.
+            if time.time() - last_upload > 30:
+                last_upload = time.time()
+                _guard("upload retry", artifacts.retry_pending)
+                _guard("connectors", integrations.tick)  # push results to ADO / Jira / GitHub / GitLab / webhooks
+            if time.time() - last_daily > 6 * 3600:
+                last_daily = time.time()
+                _guard("retention", artifacts.retention_purge)
+                _guard("privacy retention", privacy.purge_expired)
+                _guard("monitor retention", monitoring.purge_old)
+                _guard("mobile session screens", mobilerun.purge_old)
             if report_store.enabled() and time.time() - last_sync > s.mysql_reports_sync_interval_seconds:
                 ok, bad = report_store.sync_pending()
                 if ok:
                     log.info("pushed %s report(s) to MySQL", ok)
                 last_sync = time.time()
             if run_once(worker_id):
+                continue
+            if apitesting.tick(worker_id):  # API test runs and OpenAPI imports
+                continue
+            if automation.tick(worker_id):  # AI automation of manual cases, when no run is waiting
                 continue
         except Exception:
             log.exception("worker loop error")

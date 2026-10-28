@@ -2,9 +2,13 @@
 # Switches the running containers back to the previously deployed image tag.
 #   bash deploy/scripts/rollback.sh            # to the previous release
 #   bash deploy/scripts/rollback.sh <tag>      # to a specific release (see .deploy/history)
-# Database migrations are NOT reverted automatically. TestPilot migrations are additive, so an
-# older release runs on a newer schema. If a release ever needs the old schema, restore the
-# backup that deploy.sh took before migrating (restore.sh), which is an explicit, confirmed step.
+# Database migrations are NOT reverted automatically.
+# EXCEPTION — release 1.1 (migration 0003, multi-tenancy) is NOT backward compatible: release 1.0
+# cannot run on the 1.1 schema. To go back from 1.1 to 1.0, first revert the schema with the 1.1
+# image while it is still the current one (works while only the default organization exists):
+#   docker compose -f docker-compose.prod.yml --profile tools run --rm migrate alembic downgrade 0002
+# then run this script. If customer organizations already exist, restore the backup deploy.sh took
+# before migrating instead (restore.sh) — that discards everything created since the upgrade.
 source "$(dirname "$0")/common.sh"
 require_files
 TARGET="${1:-$(cat "$STATE_DIR/previous" 2>/dev/null || true)}"

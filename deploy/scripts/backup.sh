@@ -16,7 +16,7 @@ log "database dump -> $DEST/db.dump"
 
 log "evidence volume -> $DEST/evidence.tar.gz"
 docker run --rm -v testpilot_evidence:/data:ro -v "$DEST":/backup alpine:3.20 \
-  tar -czf /backup/evidence.tar.gz -C /data .
+  tar -czf /backup/evidence.tar.gz --exclude=./_spool -C /data .
 
 cp -p .env "$DEST/env.backup"; cp -p config.local "$DEST/config.local.backup"
 chmod 600 "$DEST"/*.backup

@@ -11,4 +11,11 @@ cryptography==50.0.2
 anthropic==2.3.0
 playwright==1.63.0
 python-multipart==0.0.32
+openpyxl==3.1.5
+defusedxml==0.7.1
 PyMySQL==1.1.2
+PyJWT[crypto]==2.15.1
+httpx==0.28.1
+tzdata==2026.5
+PyYAML==6.0.2
+Pillow==12.0.0

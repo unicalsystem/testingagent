@@ -195,7 +195,7 @@ def test_stale_running_run_is_reaped(admin, sample_project):
     from testpilot.models import utcnow
 
     with session_scope() as db:
-        r = Run(project_id=sample_project["id"], status="running", case_snapshot={"name": "x", "steps": []},
+        r = Run(tenant_id=1, project_id=sample_project["id"], status="running", case_snapshot={"name": "x", "steps": []},
                 started_at=utcnow() - timedelta(hours=1), heartbeat_at=utcnow() - timedelta(hours=1))
         db.add(r)
         db.flush()
@@ -273,3 +273,34 @@ def test_cancel_does_not_override_running(admin, sample_project):
         db.get(Run, rid).status = "running"  # simulate the worker claiming it first
     r = admin.post(f"/api/runs/{rid}/cancel").json()
     assert r["status"] == "running" and r["cancel_requested"] is True
+
+
+def test_customer_tenant_run_end_to_end(app, sample_server, monkeypatch):
+    """A run in a non-default tenant executes, stores evidence under tenants/<id>/ and serves it only
+    to that tenant. (The local sample server needs private access, granted here by the operator setting.)"""
+    from testpilot.config import get_settings
+    from .conftest import login, make_tenant
+
+    monkeypatch.setattr(get_settings(), "private_target_tenants", "acme")
+
+    tid = make_tenant("acme")
+    allow("127.0.0.1", tenant="acme")
+    c = login(app, "acme-qa", "qa_engineer", tenant="acme", platform=False)
+    base = "/api/t/acme"
+    p = c.post(f"{base}/projects", json={"name": "Sample", "base_url": sample_server}).json()
+    c.put(f"{base}/projects/{p['id']}/secrets", json={"name": "SAMPLE_PASSWORD", "value": "demo-pass-123"})
+    case = c.post(f"{base}/projects/{p['id']}/cases", json=SAMPLE_CASES[0]).json()
+    rid = c.post(f"{base}/cases/{case['id']}/runs").json()["id"]
+    assert worker.run_once("pytest") == rid
+    run = c.get(f"{base}/runs/{rid}").json()
+    assert run["status"] == "passed", run
+    with session_scope() as db:
+        evs = db.scalars(select(Evidence).where(Evidence.run_id == rid)).all()
+        assert evs and all(e.rel_path.startswith(f"tenants/{tid}/projects/{p['id']}/runs/{rid}/") for e in evs)
+        assert all(e.tenant_id == tid for e in evs)
+    shot = next(e for s in run["steps"] for e in s["evidence"] if e["kind"] == "screenshot")
+    assert c.get(f"{base}/evidence/{shot['id']}").status_code == 200
+    assert c.get(f"{base}/runs/{rid}/report").status_code == 200
+    other = login(app, "boss", "admin")  # Unical tenant: no access
+    assert other.get(f"/api/evidence/{shot['id']}").status_code == 404
+    assert other.get(f"/api/runs/{rid}/report").status_code == 404

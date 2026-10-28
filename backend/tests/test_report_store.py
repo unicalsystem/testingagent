@@ -29,6 +29,7 @@ def mysql_store(monkeypatch, tmp_path):
     monkeypatch.setattr(s, "mysql_reports_password", SecretStr(u.password))
     report_store.engine.cache_clear()
     report_store._tables.cache_clear()
+    monkeypatch.setattr(report_store, "_schema_ready", False)
     eng = create_engine(URL.replace("mysql://", "mysql+pymysql://"))
     with eng.begin() as c:
         c.execute(text("DROP TABLE IF EXISTS tptest_reports, tptest_report_steps"))

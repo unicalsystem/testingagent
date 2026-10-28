@@ -1,4 +1,4 @@
-# TestPilot AI — production stack for a single Hostinger VPS.
+# TestAgent — production stack for a single Hostinger VPS.
 #
 #   internet ─443─> host nginx (TLS) ─> 127.0.0.1:8081 web ─> api ─> db
 #                                                     worker ─> db, Chromium ─> authorised targets

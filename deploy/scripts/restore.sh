@@ -4,7 +4,7 @@
 #   bash deploy/scripts/restore.sh /var/backups/testpilot/20261025T020000Z
 source "$(dirname "$0")/common.sh"
 SRC="${1:?usage: restore.sh <backup-dir>}"
-[[ -f "$SRC/db.dump" && -f "$SRC/evidence.tar.gz" ]] || die "$SRC is not a TestPilot backup"
+[[ -f "$SRC/db.dump" && -f "$SRC/evidence.tar.gz" ]] || die "$SRC is not a TestAgent backup"
 ( cd "$SRC" && sha256sum -c --quiet SHA256SUMS ) || die "checksum verification failed"
 require_files
 set -a; . ./.env; set +a

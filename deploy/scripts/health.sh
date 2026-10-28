@@ -14,7 +14,7 @@ wait_healthy() {  # service, seconds
     [[ "$s" == healthy ]] && return 0; sleep 1
   done; return 1
 }
-echo "TestPilot AI health ($(date -u +%FT%TZ))"
+echo "TestAgent health ($(date -u +%FT%TZ))"
 for svc in db api worker web; do
   if wait_healthy "$svc" 90; then pass "container $svc healthy"; else fail "container $svc not healthy ($(docker inspect -f '{{.State.Status}}' testpilot-$svc-1 2>/dev/null || echo missing))"; fi
 done

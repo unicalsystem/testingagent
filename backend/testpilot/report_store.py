@@ -13,7 +13,18 @@ from datetime import datetime, timezone
 from functools import lru_cache
 
 from sqlalchemy import (
-    BigInteger, Column, DateTime, Integer, MetaData, String, Table, Text, create_engine, select,
+    BigInteger,
+    Column,
+    DateTime,
+    Integer,
+    MetaData,
+    String,
+    Table,
+    Text,
+    create_engine,
+    inspect,
+    select,
+    text,
 )
 from sqlalchemy.dialects.mysql import LONGTEXT, insert as mysql_insert
 from sqlalchemy.engine import URL, Engine
@@ -21,7 +32,7 @@ from sqlalchemy.orm import Session
 
 from . import report
 from .config import get_settings
-from .models import TERMINAL, Run
+from .models import TERMINAL, Run, Tenant
 
 log = logging.getLogger(__name__)
 
@@ -53,6 +64,8 @@ def _tables() -> tuple[MetaData, Table, Table]:
     runs = Table(
         f"{pre}reports", md,
         Column("run_id", Integer, primary_key=True, autoincrement=False),
+        Column("tenant_id", Integer, index=True),
+        Column("tenant_slug", String(40)),
         Column("project_id", Integer, nullable=False, index=True),
         Column("project_name", String(120)),
         Column("base_url", String(2048)),
@@ -82,6 +95,7 @@ def _tables() -> tuple[MetaData, Table, Table]:
         f"{pre}report_steps", md,
         Column("run_id", Integer, primary_key=True, autoincrement=False),
         Column("step_index", Integer, primary_key=True, autoincrement=False),
+        Column("tenant_id", Integer, index=True),
         Column("action", String(32)),
         Column("description", String(500)),
         Column("status", String(16)),
@@ -118,10 +132,32 @@ def engine() -> Engine:
     return create_engine(url, connect_args=args, pool_pre_ping=True, pool_recycle=600, pool_size=2, max_overflow=2)
 
 
+# Columns added after release 1.0 to tables that may already exist: (column, DDL type).
+_ADDED = {"reports": [("tenant_id", "INT NULL"), ("tenant_slug", "VARCHAR(40) NULL")],
+          "report_steps": [("tenant_id", "INT NULL")]}
+
+
+_schema_ready = False
+
+
 def ensure_schema() -> None:
-    md, _, _ = _tables()
+    global _schema_ready
+    if _schema_ready:
+        return
+    md, runs, steps = _tables()
     try:
-        md.create_all(engine())  # CREATE TABLE IF NOT EXISTS; never drops or alters
+        md.create_all(engine())  # CREATE TABLE IF NOT EXISTS; never drops
+        # Additive upgrade of release-1.0 tables: add missing tenant columns (never drops or changes data).
+        insp = inspect(engine())
+        pre = get_settings().mysql_reports_table_prefix
+        with engine().begin() as c:
+            for suffix, cols in _ADDED.items():
+                have = {col["name"] for col in insp.get_columns(f"{pre}{suffix}")}
+                for name, ddl in cols:
+                    if name not in have:
+                        c.execute(text(f"ALTER TABLE `{pre}{suffix}` ADD COLUMN `{name}` {ddl}, ADD INDEX (`{name}`)"
+                                       if name == "tenant_id" else f"ALTER TABLE `{pre}{suffix}` ADD COLUMN `{name}` {ddl}"))
+        _schema_ready = True
     except Exception as e:
         raise ReportStoreError(_describe(e), connection=True) from e
 
@@ -163,6 +199,14 @@ def push(db: Session, run: Run) -> None:
     """Upsert one finished run (and its steps) into MySQL."""
     if run.status not in TERMINAL:
         raise ReportStoreError(f"run {run.id} is not finished")
+    if run.storage_mode == "external":
+        # Organizations with their own storage: no report content is copied to Unical's MySQL.
+        raise ReportStoreError(f"run {run.id} uses the organization's own storage; not copied")
+    from .models import TenantStorage
+    ts = db.get(TenantStorage, run.tenant_id)
+    erased = (ts.config or {}).get("local_data_deleted_at") if ts else None
+    if erased and run.created_at and run.created_at <= datetime.fromisoformat(erased):
+        raise ReportStoreError(f"run {run.id}: the organization deleted its data from Unical servers; not copied")
     s = get_settings()
     _, runs, steps = _tables()
     data = report.build_data(db, run)
@@ -173,8 +217,11 @@ def push(db: Session, run: Run) -> None:
     omitted = len(html.encode()) + len(json_text.encode()) > s.mysql_reports_max_html_mb * 1024 * 1024
     r, summ = data["run"], data["run"].get("summary") or {}
     shots = {e["id"]: e for e in data["evidence"] if e["kind"] == "screenshot"}
+    tenant = db.get(Tenant, run.tenant_id)
     row = {
         "run_id": run.id,
+        "tenant_id": run.tenant_id,
+        "tenant_slug": tenant.slug if tenant else None,
         "project_id": run.project_id,
         "project_name": (data["project"] or {}).get("name"),
         "base_url": (data["project"] or {}).get("base_url"),
@@ -193,7 +240,7 @@ def push(db: Session, run: Run) -> None:
         "blocked_requests": summ.get("blocked_requests", 0),
         "error": run.error or None,
         "ai_analysis": run.ai_analysis or None,
-        "report_url": f"{s.public_url}/runs/{run.id}",
+        "report_url": f"{s.public_url}/{tenant.slug if tenant else s.default_tenant_slug}/runs/{run.id}",
         "report_json": json_text,
         "report_html": None if omitted else html,
         "report_html_omitted": 1 if omitted else 0,
@@ -202,7 +249,7 @@ def push(db: Session, run: Run) -> None:
     step_rows = []
     for st in data["steps"]:
         shot = next((shots[e["id"]]["sha256"] for e in st["evidence"] if e["id"] in shots), None)
-        step_rows.append({"run_id": run.id, "step_index": st["index"], "action": st["action"],
+        step_rows.append({"run_id": run.id, "tenant_id": run.tenant_id, "step_index": st["index"], "action": st["action"],
                           "description": (st["description"] or "")[:500], "status": st["status"],
                           "attempts": st["attempts"], "duration_ms": st["duration_ms"],
                           "error": st["error"] or None, "screenshot_sha256": shot})
@@ -229,7 +276,8 @@ def sync_pending(limit: int = 50) -> tuple[int, int]:
     ok = failed = 0
     with session_scope() as db:
         # Never-attempted runs first, then earlier failures, so one bad report cannot starve the rest.
-        ids = db.scalars(select(Run.id).where(Run.status.in_(TERMINAL), Run.report_synced_at.is_(None))
+        ids = db.scalars(select(Run.id).where(Run.status.in_(TERMINAL), Run.report_synced_at.is_(None),
+                                              Run.storage_mode != "external")
                          .order_by(Run.report_sync_error != "", Run.id).limit(limit)).all()
     for rid in ids:
         with session_scope() as db:
@@ -246,3 +294,17 @@ def sync_pending(limit: int = 50) -> tuple[int, int]:
                     break  # MySQL is down: stop and retry on the next cycle
                 # otherwise a problem with this report only: carry on with the next run
     return ok, failed
+
+
+def delete_tenant(tenant_id: int) -> int:
+    """Removes an organization's report copies from MySQL (organization data-deletion request)."""
+    _, runs, steps = _tables()
+    try:
+        ensure_schema()
+        with engine().begin() as c:
+            c.execute(steps.delete().where(steps.c.tenant_id == tenant_id))
+            return c.execute(runs.delete().where(runs.c.tenant_id == tenant_id)).rowcount or 0
+    except ReportStoreError:
+        raise
+    except Exception as e:
+        raise ReportStoreError(_describe(e), connection=_is_connection_error(e)) from e

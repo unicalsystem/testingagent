@@ -144,8 +144,8 @@ class EgressProxy:
                 ips = self._vet(parts.hostname, port)
             except TargetRejected as e:
                 self._block(f"{method} {target[:200]}: {e}")
-                body = f"Blocked by TestPilot AI egress policy: {e}".encode()
-                writer.write(b"HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain\r\nX-TestPilot-Blocked: 1\r\nConnection: close\r\n"
+                body = f"Blocked by TestAgent egress policy: {e}".encode()
+                writer.write(b"HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain\r\nX-TestAgent-Blocked: 1\r\nConnection: close\r\n"
                              + f"Content-Length: {len(body)}\r\n\r\n".encode() + body)
                 await writer.drain()
                 return

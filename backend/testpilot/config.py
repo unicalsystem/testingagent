@@ -25,6 +25,13 @@ class Settings(BaseSettings):
     allowed_origins: str = "https://testingagent.unical.in"  # comma separated
     api_root_path: str = ""  # nginx strips nothing; routes are mounted under /api
 
+    # --- multi-tenancy -----------------------------------------------------
+    # Tenant served by the legacy /api/... routes and old /projects/... links (release 1.0 data).
+    default_tenant_slug: str = Field(default="unical", pattern=r"^[a-z0-9](?:[a-z0-9-]{1,38}[a-z0-9])$")
+    registration_enabled: bool = True
+    registrations_per_ip_per_day: int = 5
+    invitation_ttl_hours: int = 72
+
     # --- database ----------------------------------------------------------
     database_url: SecretStr = SecretStr("postgresql+psycopg://testpilot:change-me@db:5432/testpilot")
     db_pool_size: int = 5
@@ -66,6 +73,9 @@ class Settings(BaseSettings):
     # Hostnames that may resolve to private addresses (e.g. the bundled sample app).
     # Operator-level only: cannot be changed from the UI.
     allowed_private_targets: str = ""
+    # Organizations allowed to use ALLOWED_PRIVATE_TARGETS (comma separated slugs). Default: only the
+    # default (Unical) organization. Customer organizations can never reach private addresses.
+    private_target_tenants: str = ""
 
     # --- MySQL report store (copy of every finished run's report) ---------
     mysql_reports_enabled: bool = False
@@ -92,6 +102,11 @@ class Settings(BaseSettings):
     @property
     def origins(self) -> list[str]:
         return [o.strip().rstrip("/") for o in self.allowed_origins.split(",") if o.strip()]
+
+    @property
+    def private_target_tenant_slugs(self) -> set[str]:
+        extra = {h.strip().lower() for h in self.private_target_tenants.split(",") if h.strip()}
+        return extra | {self.default_tenant_slug}
 
     @property
     def private_targets(self) -> set[str]:

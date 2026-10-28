@@ -39,7 +39,7 @@ export function ProjectForm({ initial, onSaved, onClose }: { initial?: Project; 
 }
 
 export default function Projects() {
-  const { can } = useApp()
+  const { has } = useApp()
   const nav = useNavigate()
   const { data, error } = useAsync(() => api.get<Project[]>('/projects'), [])
   const [creating, setCreating] = useState(false)
@@ -47,22 +47,22 @@ export default function Projects() {
     <>
       <div className="topbar">
         <div><h1>Projects</h1><div className="muted small">Web applications under test</div></div>
-        {can('tester') && <button className="btn primary" onClick={() => setCreating(true)}>+ New project</button>}
+        {has('project.create') && <button className="btn primary" onClick={() => setCreating(true)}>+ New project</button>}
       </div>
       <Alert>{error}</Alert>
       <div className="panel" style={{ padding: 0 }}>
-        {data && data.length === 0 && <div className="empty">No projects yet.{can('tester') && ' Create one to start testing.'}</div>}
+        {data && data.length === 0 && <div className="empty">No projects yet.{has('project.create') && ' Create one to start testing.'}</div>}
         {data && data.length > 0 && (
-          <table className="t">
+          <table className="t resp">
             <thead><tr><th>Project</th><th>Base URL</th><th>Test cases</th><th>Last run</th></tr></thead>
             <tbody>
               {data.map((p) => (
                 <tr key={p.id} className="click" onClick={() => nav(`/projects/${p.id}`)}>
                   <td><Link to={`/projects/${p.id}`} onClick={(e) => e.stopPropagation()}><b>{p.name}</b></Link>
                     {p.policy_problems.length > 0 && <div className="small" style={{ color: 'var(--warn)' }}>Target not authorised</div>}</td>
-                  <td className="mono">{p.base_url}</td>
-                  <td>{p.case_count}</td>
-                  <td>{p.last_run ? <><Badge s={p.last_run.status} /> <span className="muted small">{fmtDate(p.last_run.created_at)}</span></> : <span className="muted">—</span>}</td>
+                  <td className="mono small" data-label="URL">{p.base_url}</td>
+                  <td data-label="Cases">{p.case_count}</td>
+                  <td data-label="Last run">{p.last_run ? <><Badge s={p.last_run.status} /> <span className="muted small">{fmtDate(p.last_run.created_at)}</span></> : <span className="muted">—</span>}</td>
                 </tr>
               ))}
             </tbody>

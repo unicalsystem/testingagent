@@ -15,14 +15,17 @@ from testpilot.models import Evidence, Project, Run, RunStep, TestCase
 from testpilot.steps import describe
 
 with session_scope() as db:
-    p = db.scalars(select(Project).where(Project.name == "Sample App (Acme Tasks)")).one()
+    from testpilot.config import get_settings
+    from testpilot.models import Tenant
+    t = db.scalars(select(Tenant).where(Tenant.slug == get_settings().default_tenant_slug)).one()
+    p = db.scalars(select(Project).where(Project.tenant_id == t.id, Project.name == "Sample App (Acme Tasks)")).one()
     ids = []
     for c in db.scalars(select(TestCase).where(TestCase.project_id == p.id, TestCase.archived.is_(False))).all():
-        r = Run(project_id=p.id, test_case_id=c.id, status="queued",
+        r = Run(tenant_id=p.tenant_id, project_id=p.id, test_case_id=c.id, status="queued",
                 case_snapshot={"name": c.name, "description": c.description, "steps": c.steps})
         db.add(r); db.flush()
         for i, s in enumerate(c.steps):
-            db.add(RunStep(run_id=r.id, idx=i, action=s["action"], description=describe(s)[:500]))
+            db.add(RunStep(tenant_id=p.tenant_id, run_id=r.id, idx=i, action=s["action"], description=describe(s)[:500]))
         ids.append(r.id)
 print("queued runs", ids, flush=True)
 deadline = time.time() + 300
@@ -45,4 +48,4 @@ with session_scope() as db:
 sys.exit(0 if ok else 1)
 PY
 set -a; . ./.env; set +a
-log "end-to-end verification passed. Open $PUBLIC_URL/projects to see the runs and download reports."
+log "end-to-end verification passed. Open $PUBLIC_URL/${DEFAULT_TENANT_SLUG:-unical}/projects to see the runs and download reports."

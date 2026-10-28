@@ -1,4 +1,4 @@
-"""Builds the per-project network policy from the global allowlist."""
+"""Builds the per-project network policy from the project's tenant allowlist."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .config import get_settings
-from .models import AllowedTarget, Project
+from .models import AllowedTarget, Project, Tenant
 from .urlguard import Policy, TargetRejected, normalize_host, parse_target, valid_hostname
 
 
@@ -43,8 +43,14 @@ def project_hosts(base_url: str, extra_hosts: list[str]) -> tuple[set[str], set[
     return hosts, ports
 
 
-def allowlist(db: Session) -> set[str]:
-    return {normalize_host(h) for h in db.scalars(select(AllowedTarget.host)).all()}
+def allowlist(db: Session, tenant_id: int) -> set[str]:
+    """Hosts approved by this tenant only. Another tenant's approval never applies."""
+    return {normalize_host(h) for h in db.scalars(select(AllowedTarget.host).where(AllowedTarget.tenant_id == tenant_id)).all()}
+
+
+def private_tenant_ids(db: Session) -> set[int]:
+    slugs = get_settings().private_target_tenant_slugs
+    return set(db.scalars(select(Tenant.id).where(Tenant.slug.in_(slugs))).all())
 
 
 def build(db: Session, project: Project) -> ProjectPolicy:
@@ -53,10 +59,12 @@ def build(db: Session, project: Project) -> ProjectPolicy:
         hosts, ports = project_hosts(project.base_url, project.extra_hosts)
     except TargetRejected as e:
         return ProjectPolicy(Policy(frozenset(), frozenset()), set(), [str(e)])
-    approved = allowlist(db)
+    approved = allowlist(db, project.tenant_id)
     missing = sorted(hosts - approved)
     if missing:
         problems.append("not on the authorised target allowlist: " + ", ".join(missing))
     ok_hosts = frozenset(hosts & approved)
-    private_ok = frozenset(ok_hosts & get_settings().private_targets)
+    # Private/loopback access is an operator decision and only for operator-listed organizations.
+    private_ok = (frozenset(ok_hosts & get_settings().private_targets)
+                  if project.tenant_id in private_tenant_ids(db) else frozenset())
     return ProjectPolicy(Policy(ok_hosts, private_ok), ports, problems)
