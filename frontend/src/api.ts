@@ -74,6 +74,7 @@ export interface Me {
   tenant?: { id: number; slug: string; name: string }
   legal_pending?: string[]
   licence?: LicenceBrief
+  has_password?: boolean
 }
 export interface Branding {
   slug: string; name: string; display_name: string; logo_data_url: string; primary_color: string

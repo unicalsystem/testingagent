@@ -29,13 +29,19 @@ class PasswordIn(BaseModel):
     new_password: str = Field(min_length=12, max_length=256)
 
 
+class ProfileIn(BaseModel):
+    display_name: str | None = Field(default=None, max_length=120)
+    email: str | None = Field(default=None, max_length=254)
+    current_password: str = Field(default="", max_length=256)  # required to change the e-mail address
+
+
 def user_out(u: User, tenant: Tenant | None = None, db: Session | None = None) -> dict:
     out = {"id": u.id, "username": u.username, "display_name": u.display_name, "email": u.email, "role": u.role,
            "role_label": permissions.ROLE_LABELS.get(u.role, u.role),
            "legacy_role": permissions.legacy_role(u.role),
            "permissions": permissions.permissions_for(u.role),
            "is_platform_admin": u.is_platform_admin,
-           "must_change_password": u.must_change_password}
+           "must_change_password": u.must_change_password, "has_password": bool(u.password_hash)}
     if tenant is not None:
         out["tenant"] = {"id": tenant.id, "slug": tenant.slug, "name": tenant.name}
     if db is not None:
@@ -151,6 +157,58 @@ def change_password(body: PasswordIn, request: Request, response: Response,
     audit(db, request, user, "password_changed", user.username)
     db.commit()
     return user_out(user, tenant, db)
+
+
+@router.patch("/me")
+def update_profile(body: ProfileIn, request: Request, user: User = Depends(current_user), db: Session = Depends(get_db),
+                   tenant: Tenant = Depends(current_tenant)):
+    """Every user edits their own display name and e-mail. Username and role are managed by administrators."""
+    from .. import tenancy
+    from .routes_admin import EMAIL_RE
+
+    changed: list[str] = []
+    if body.display_name is not None and body.display_name.strip() != user.display_name:
+        user.display_name = body.display_name.strip()
+        changed.append("display_name")
+    if body.email is not None:
+        email = body.email.strip().lower()
+        if email != (user.email or "").lower():
+            if email and not EMAIL_RE.match(email):
+                raise HTTPException(422, "Enter a valid e-mail address")
+            if not user.password_hash:
+                raise HTTPException(409, "Your e-mail address comes from your Microsoft account; ask an administrator to change it")
+            if not verify_password(body.current_password, user.password_hash):
+                raise HTTPException(400, "Enter your current password to change your e-mail address")
+            clash = tenancy.identity_conflict(db, tenant.id, email=email, exclude_user_id=user.id) if email else None
+            if clash:
+                raise HTTPException(409, clash)
+            if email and db.scalars(select(User.id).where(User.tenant_id == tenant.id, User.id != user.id,
+                                                          func.lower(User.email) == email)).first():
+                raise HTTPException(409, "That e-mail address is already used in this organization")
+            user.email = email
+            changed.append("email")
+    if changed:
+        audit(db, request, user, "profile_updated", user.username, fields=changed)
+        db.commit()
+    return user_out(user, tenant, db)
+
+
+@router.get("/sessions")
+def my_sessions(request: Request, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    rows = db.scalars(select(Session_).where(Session_.user_id == user.id).order_by(Session_.last_seen_at.desc())).all()
+    cur = getattr(request.state, "session_id", None)
+    return [{"id": s.id, "current": s.id == cur, "method": getattr(s, "auth_method", ""), "ip": getattr(s, "ip", ""),
+             "user_agent": (getattr(s, "user_agent", "") or "")[:200], "created_at": s.created_at,
+             "last_seen_at": s.last_seen_at} for s in rows]
+
+
+@router.post("/sessions/revoke-others")
+def revoke_other_sessions(request: Request, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    cur = getattr(request.state, "session_id", None)
+    n = db.execute(delete(Session_).where(Session_.user_id == user.id, Session_.id != cur)).rowcount or 0
+    audit(db, request, user, "sessions_revoked", user.username, count=n)
+    db.commit()
+    return {"revoked": n}
 
 
 @router.delete("/microsoft-link")

@@ -24,6 +24,8 @@ import MobileRunPage from './pages/MobileRun'
 import MobileSessionPage from './pages/MobileSession'
 import { MonitorAlerts } from './components/MonitorAlerts'
 import BillingPage from './pages/Billing'
+import Profile from './pages/Profile'
+import { UserMenu } from './components/UserMenu'
 
 export function Logo({ branding, size = 30 }: { branding?: Branding | null; size?: number }) {
   if (branding?.logo_data_url) return <img src={branding.logo_data_url} alt="" width={size} height={size} style={{ objectFit: 'contain', borderRadius: 6, background: '#fff' }} />
@@ -155,6 +157,10 @@ export default function App({ slug }: { slug: string }) {
           <div className="legal-links"><a href="/privacy" target="_blank" rel="noopener">Privacy</a> · <a href="/terms" target="_blank" rel="noopener">Terms</a> · Unical Systems</div>
         </nav>
         <main className="main">
+          <div className="userbar">
+            <UserMenu me={me} showBilling={!!me.licence && !me.licence.exempt} onLogout={logout}
+              onLinkMicrosoft={me.sign_in_methods?.microsoft && !me.microsoft_linked ? linkMicrosoft : undefined} />
+          </div>
           <LicenceBanner me={me} manage={has('tenant.settings')} />
           <MonitorAlerts />
           {notice === 'microsoft_linked' && <div className="alert ok" role="status">Your Microsoft account is linked. You can now sign in with Microsoft.</div>}
@@ -192,6 +198,7 @@ export default function App({ slug }: { slug: string }) {
             <Route path="/mobile-runs/:gid" element={<MobileRunPage />} />
             <Route path="/mobile-sessions/:sid" element={<MobileSessionPage />} />
             <Route path="/my-privacy" element={<MyPrivacy />} />
+            <Route path="/profile" element={<Profile onMe={setMe} />} />
             <Route path="/billing" element={<BillingPage onLicence={refreshMe} />} />
             {showAdmin && <Route path="/admin" element={<Admin />} />}
             {me.is_platform_admin && <Route path="/platform" element={<Platform />} />}

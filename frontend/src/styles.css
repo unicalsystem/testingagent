@@ -228,3 +228,18 @@ ul.summary { margin: 0; padding-left: 20px } ul.summary li { margin: 4px 0 }
   .shell.collapsed .side .label { display: inline } .shell.collapsed .side .who, .shell.collapsed .side .legal-links { display: block }
   .shell.collapsed .side a { width: auto; text-align: left; padding: 12px 10px } .shell.collapsed .side a .ico { margin-right: 8px }
 }
+
+/* release 1.9.1: account menu (top right) */
+.userbar { display: flex; justify-content: flex-end; margin: -10px 0 12px }
+.usermenu { position: relative }
+.usermenu-btn { display: flex; align-items: center; gap: 10px; background: var(--panel); border: 1px solid var(--line); border-radius: 999px; padding: 4px 12px 4px 4px; cursor: pointer; font: inherit; color: var(--ink); max-width: 340px }
+.usermenu-btn:hover { border-color: #b9c3d3 }
+.usermenu-name { display: flex; flex-direction: column; align-items: flex-start; line-height: 1.2; min-width: 0; text-align: left }
+.usermenu-name b, .usermenu-name small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 240px }
+.usermenu-name small { color: var(--ink-3); font-size: 11.5px }
+.usermenu-pop { position: absolute; right: 0; top: calc(100% + 6px); z-index: 50; width: 270px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 10px 30px rgba(16,24,40,.14); padding: 6px; display: flex; flex-direction: column }
+.usermenu-head { display: flex; gap: 10px; align-items: center; padding: 8px 8px 10px; border-bottom: 1px solid var(--line); margin-bottom: 4px; min-width: 0 }
+.usermenu-pop a { padding: 8px 10px; border-radius: 6px; color: var(--ink); font-size: 13.5px }
+.usermenu-pop a:hover { background: #f1f4f9; text-decoration: none }
+.usermenu-pop a.danger { color: var(--bad); border-top: 1px solid var(--line); border-radius: 0 0 6px 6px; margin-top: 4px }
+@media (max-width: 820px) { .userbar { margin: 0 0 10px } .usermenu-name small { display: none } .usermenu-name b { max-width: 150px } }
